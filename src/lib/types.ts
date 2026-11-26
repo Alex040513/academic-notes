@@ -35,10 +35,17 @@ export const QUESTION_TYPES = ['choice', 'blank', 'correct', 'translate'] as con
 export type QuestionType = (typeof QUESTION_TYPES)[number]
 
 export const QUESTION_TYPE_LABEL: Record<QuestionType, string> = {
-  choice: '单项选择',
-  blank: '填空',
-  correct: '改错',
-  translate: '翻译/造句',
+  choice: '选择题',
+  blank: '填空题',
+  correct: '纠错题',
+  translate: '翻译 / 表述',
+}
+
+export const QUESTION_TYPE_HINT: Record<QuestionType, string> = {
+  choice: '四选一，考辨析',
+  blank: '挖空关键结论或公式',
+  correct: '挑出错误并改正',
+  translate: '换个说法或换种语言',
 }
 
 export type Question = {
@@ -69,6 +76,8 @@ export type Settings = {
   branch: string
   deepseekKey: string
   model: string
+  /** GitHub 返回的 Token 到期时间（ISO），连过一次就自动记下来 */
+  tokenExpiry?: string | null
   /** 演示模式：只在本机内存/缓存里跑，不连 GitHub */
   demo?: boolean
 }
@@ -79,7 +88,8 @@ export const EMPTY_SETTINGS: Settings = {
   repo: 'academic-english-notes-data',
   branch: 'main',
   deepseekKey: '',
-  model: 'deepseek-chat',
+  model: 'deepseek-flash',
+  tokenExpiry: null,
   demo: false,
 }
 

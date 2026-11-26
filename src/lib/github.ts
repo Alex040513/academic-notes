@@ -2,6 +2,22 @@ import type { Settings } from './types'
 
 const API = 'https://api.github.com'
 
+/**
+ * GitHub 在每次响应里都会带上 Token 的到期时间：
+ *   github-authentication-token-expiration: 2027-02-24 17:00:00 UTC
+ * 顺手记下来，用来在界面里提醒续期。
+ */
+let tokenExpiry: string | null = null
+
+export function getTokenExpiry(): string | null {
+  return tokenExpiry
+}
+
+function normalizeExpiry(v: string): string {
+  const m = v.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/)
+  return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}Z` : v
+}
+
 export type RepoConfig = Pick<Settings, 'token' | 'owner' | 'repo' | 'branch'>
 
 export class GitHubError extends Error {
@@ -62,6 +78,10 @@ async function api<T>(cfg: RepoConfig, path: string, init: RequestInit = {}): Pr
   }
 
   if (res.status === 204) return undefined as T
+
+  const exp = res.headers.get('github-authentication-token-expiration')
+  if (exp) tokenExpiry = normalizeExpiry(exp)
+
   return (await res.json()) as T
 }
 

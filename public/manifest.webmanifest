@@ -1,6 +1,6 @@
 {
-  "name": "学术英语笔记",
-  "short_name": "笔记",
+  "name": "学问 · 知识卡片",
+  "short_name": "学问",
   "description": "知识点速记 · 间隔复习 · AI 出题",
   "start_url": "./",
   "scope": "./",

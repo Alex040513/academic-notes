@@ -102,7 +102,7 @@ export function Shell() {
           </span>
           <div className="leading-tight">
             <p className="font-serif text-[15px] font-semibold text-stone-900">学问</p>
-            <p className="text-[11px] text-stone-400">学术英语笔记</p>
+            <p className="text-[11px] text-stone-400">知识卡片</p>
           </div>
         </div>
 

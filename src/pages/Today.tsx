@@ -56,6 +56,9 @@ export function Today() {
   const dueNotes = notes.filter((n) => isDue(n.review))
   const todayCount = notes.filter((n) => n.created.slice(0, 10) === dateStr()).length
   const recent = [...notes].sort((a, b) => b.updated.localeCompare(a.updated)).slice(0, 5)
+  const tokenDaysLeft = settings.tokenExpiry
+    ? Math.ceil((new Date(settings.tokenExpiry).getTime() - Date.now()) / 86_400_000)
+    : null
 
   async function handleSave() {
     const body = (preview?.body ?? raw).trim()
@@ -135,6 +138,22 @@ export function Today() {
         </div>
       )}
 
+      {tokenDaysLeft !== null && tokenDaysLeft <= 30 && (
+        <Link
+          to="/settings"
+          className={`block rounded-2xl border px-4 py-2.5 text-xs leading-5 ${
+            tokenDaysLeft <= 0
+              ? 'border-red-200 bg-red-50 text-red-800'
+              : 'border-amber-200 bg-amber-50/70 text-amber-900'
+          }`}
+        >
+          {tokenDaysLeft <= 0
+            ? 'GitHub Token 已经过期了，现在无法同步新笔记。'
+            : `GitHub Token 还有 ${tokenDaysLeft} 天到期，过期后就没法同步了。`}
+          点这里看怎么续期 →
+        </Link>
+      )}
+
       {/* 速记区 */}
       <section className="card overflow-hidden shadow-card">
         <div className="border-b border-stone-100 px-4 py-2.5">
@@ -186,7 +205,7 @@ export function Today() {
                   void handleSave()
                 }
               }}
-              placeholder="比如：老师说 that 引导的同位语从句和定语从句，区别在于从句是否完整……"
+              placeholder="想到什么就写什么，不用管格式。比如：老师说 that 引导的同位语从句和定语从句，区别在于从句是否完整……"
               className="min-h-[104px] w-full resize-none border-0 bg-transparent text-[15px] leading-7 text-stone-800 outline-none placeholder:text-stone-400"
             />
 

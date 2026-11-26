@@ -36,6 +36,18 @@ export function Settings() {
     return { count: notes.length, tags: tags.size, courses: new Set(notes.map((n) => n.course).filter(Boolean)).size }
   }, [notes])
 
+  const expiry = useMemo(() => {
+    const iso = settings.tokenExpiry
+    if (!iso) return null
+    const t = new Date(iso).getTime()
+    if (Number.isNaN(t)) return null
+    const days = Math.ceil((t - Date.now()) / 86_400_000)
+    const date = new Date(t).toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
+    if (days <= 0) return { text: `Token 已于 ${date} 过期，同步会失效，需要重新生成`, cls: 'text-red-600' }
+    if (days <= 30) return { text: `Token 将在 ${date} 过期（还有 ${days} 天），记得续期`, cls: 'text-amber-700' }
+    return { text: `Token 有效期至 ${date}（还有 ${days} 天）`, cls: 'text-stone-400' }
+  }, [settings.tokenExpiry])
+
   async function handleConnect() {
     const token = form.token.trim()
     const repo = form.repo.trim()
@@ -182,6 +194,17 @@ export function Settings() {
         </div>
 
         <div className="space-y-4 px-5 py-4">
+          <div className="rounded-xl border border-stone-200 bg-stone-50/60 px-3.5 py-3 text-xs leading-6 text-stone-600">
+            <p className="font-medium text-stone-800">这个 Token 是什么？</p>
+            <p className="mt-1">
+              它就是一把<strong className="text-stone-700">只能读写你笔记仓库的钥匙</strong>。这个网站没有自己的服务器，
+              每次保存笔记、记录复习进度，都是靠它把这些内容写进你的 GitHub 私有仓库。
+            </p>
+            <p className="mt-1 text-stone-500">
+              它只存在这台设备的浏览器里，不会发给任何第三方；Token 有有效期，过期后同步会失效，重新生成一个贴进来就行，笔记不会丢。
+            </p>
+          </div>
+
           {hasRepo(settings) && (
             <div className="rounded-xl bg-stone-50 px-3.5 py-2.5 text-xs leading-6 text-stone-600">
               <p className="font-mono text-[11px] text-stone-700">
@@ -191,6 +214,24 @@ export function Settings() {
                 共 {stats.count} 条笔记 · {stats.tags} 个标签
                 {lastSync && ` · 上次同步 ${new Date(lastSync).toLocaleString('zh-CN')}`}
               </p>
+              {expiry && (
+                <p className={`mt-1 ${expiry.cls}`}>
+                  {expiry.text}
+                  {settings.tokenExpiry && new Date(settings.tokenExpiry).getTime() - Date.now() < 30 * 86_400_000 && (
+                    <a
+                      href="https://github.com/settings/tokens"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="ml-1.5 underline underline-offset-2"
+                    >
+                      去续期
+                    </a>
+                  )}
+                </p>
+              )}
+              {!expiry && hasRepo(settings) && (
+                <p className="mt-1 text-stone-400">点一下「立即同步」就能读到 Token 的到期时间</p>
+              )}
               <div className="mt-2 flex flex-wrap gap-2">
                 <a
                   href={repoUrl}
@@ -365,9 +406,12 @@ export function Settings() {
               onChange={(e) => setForm({ ...form, model: e.target.value })}
               className="input text-sm"
             >
-              <option value="deepseek-chat">deepseek-chat（快，够用）</option>
-              <option value="deepseek-reasoner">deepseek-reasoner（更会讲道理，稍慢）</option>
+              <option value="deepseek-flash">deepseek-flash（快、便宜、能看图片）</option>
+              <option value="deepseek-v4-pro">deepseek-v4-pro（推理更强，看不了图片）</option>
             </select>
+            <p className="mt-1.5 text-[11px] leading-5 text-stone-400">
+              想用 PPT / 图片出题就选 <span className="font-mono">deepseek-flash</span>，只有它能读图。
+            </p>
           </div>
 
           {aiStatus && (

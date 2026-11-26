@@ -64,7 +64,17 @@ function readSettings(): Settings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY)
     if (!raw) return EMPTY_SETTINGS
-    return { ...EMPTY_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) }
+    const s = { ...EMPTY_SETTINGS, ...(JSON.parse(raw) as Partial<Settings>) }
+    // DeepSeek 已停用旧模型名，自动迁移到新模型并写回
+    if (s.model && !['deepseek-flash', 'deepseek-v4-pro'].includes(s.model)) {
+      s.model = 'deepseek-flash'
+      try {
+        localStorage.setItem(SETTINGS_KEY, JSON.stringify(s))
+      } catch {
+        /* ignore */
+      }
+    }
+    return s
   } catch {
     return EMPTY_SETTINGS
   }
@@ -157,6 +167,21 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setNotes(live)
       writeCache(live)
       setLastSync(new Date().toISOString())
+
+      // 记下 Token 到期时间（GitHub 在每个响应头里都会给）
+      const exp = gh.getTokenExpiry()
+      if (exp) {
+        setSettings((prev) => {
+          if (prev.tokenExpiry === exp) return prev
+          const next = { ...prev, tokenExpiry: exp }
+          try {
+            localStorage.setItem(SETTINGS_KEY, JSON.stringify(next))
+          } catch {
+            /* ignore */
+          }
+          return next
+        })
+      }
     } catch (e) {
       setSyncError(friendly(e))
     } finally {

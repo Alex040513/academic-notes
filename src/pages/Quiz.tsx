@@ -1,12 +1,28 @@
-import { AlertTriangle, ArrowRight, Check, ChevronDown, RotateCcw, Sparkles, Wand2, X } from 'lucide-react'
+import {
+  AlertTriangle,
+  ArrowRight,
+  Check,
+  ChevronDown,
+  FileText,
+  Image as ImageIcon,
+  Paperclip,
+  RotateCcw,
+  Sparkles,
+  Trash2,
+  Upload,
+  Wand2,
+  X,
+} from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { Spinner } from '../components/ui'
-import { AIError, generateQuiz, gradeOpenAnswer } from '../lib/ai'
+import { AIError, generateQuiz, gradeOpenAnswer, supportsVision, type QuizSource } from '../lib/ai'
 import { demoQuestions } from '../lib/demoQuiz'
+import { ACCEPT_ATTR, imageToDataUrl, materialKind, readMaterial, type MaterialKind } from '../lib/extract'
 import { useStore } from '../lib/store'
 import { weakness } from '../lib/srs'
 import {
+  QUESTION_TYPE_HINT,
   QUESTION_TYPE_LABEL,
   QUESTION_TYPES,
   type Note,
@@ -56,6 +72,18 @@ export function Quiz() {
   const [error, setError] = useState<string | null>(null)
   const [scopeLabel, setScopeLabel] = useState('')
 
+  // 上传的课程材料（PPT / PDF / Word / 图片）
+  const [material, setMaterial] = useState<{
+    name: string
+    kind: MaterialKind
+    text: string
+    images: File[]
+    pages: number
+  } | null>(null)
+  const [extracting, setExtracting] = useState<string | null>(null)
+  const [materialError, setMaterialError] = useState<string | null>(null)
+  const [showMaterialText, setShowMaterialText] = useState(false)
+
   const tags = useMemo(() => {
     const m = new Map<string, number>()
     for (const n of notes) for (const t of n.tags) m.set(t, (m.get(t) || 0) + 1)
@@ -95,6 +123,50 @@ export function Quiz() {
     }
   }
 
+  async function handleFiles(files: FileList | null) {
+    if (!files || !files.length) return
+    setMaterialError(null)
+    const arr = Array.from(files)
+    const images = arr.filter((f) => materialKind(f) === 'image')
+    const docs = arr.filter((f) => materialKind(f) !== 'image')
+
+    try {
+      if (docs.length) {
+        setExtracting('正在解析文档…')
+        const m = await readMaterial(docs[0], setExtracting)
+        if (!m.text.trim()) {
+          setMaterial(null)
+          setMaterialError(
+            '这个文件里没读出文字（可能是扫描版 PDF 或纯图片的 PPT）。可以截个图，用图片方式上传。',
+          )
+        } else {
+          setMaterial(m)
+          setShowMaterialText(false)
+        }
+      } else if (images.length) {
+        const merged = [...(material?.images ?? []), ...images].slice(0, 6)
+        setMaterial({
+          name: merged.length > 1 ? `${merged.length} 张图片` : merged[0].name,
+          kind: 'image',
+          text: material?.text ?? '',
+          images: merged,
+          pages: 0,
+        })
+      }
+    } catch (e) {
+      setMaterial(null)
+      setMaterialError(e instanceof Error ? e.message : '解析失败，换一个文件试试')
+    } finally {
+      setExtracting(null)
+    }
+  }
+
+  function clearMaterial() {
+    setMaterial(null)
+    setMaterialError(null)
+    setShowMaterialText(false)
+  }
+
   function beginRun(qs: Question[], label: string) {
     setQuestions(qs)
     setIdx(0)
@@ -114,32 +186,57 @@ export function Quiz() {
     }
 
     // 演示模式且没配 Key 时，用内置题目把流程跑通
-    const useDemo = Boolean(settings.demo && !settings.deepseekKey)
+    const useDemo = Boolean(settings.demo && !settings.deepseekKey && !material)
     if (!settings.deepseekKey && !useDemo) {
       setError('还没有填 DeepSeek API Key。去「设置」里填上，AI 才能出题。')
       return
     }
 
-    const { list, label } = pickScope()
-    if (!list.length) {
-      setError('这个范围里没有知识点，换一个范围试试。')
-      return
+    let source: QuizSource
+    let label = ''
+
+    if (material) {
+      if (material.images.length && !supportsVision(settings.model)) {
+        setError(
+          '当前模型看不了图片。去「设置」把模型换成 deepseek-flash，或者把图片里的内容转成文字再上传。',
+        )
+        return
+      }
+      label = material.pages ? `${material.name} · ${material.pages} 页` : material.name
+      setError(null)
+      setScopeLabel(label)
+      setPhase('loading')
+      try {
+        const images = material.images.length
+          ? await Promise.all(material.images.map((f) => imageToDataUrl(f)))
+          : undefined
+        source = { kind: 'material', name: material.name, text: material.text, images }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : '图片处理失败')
+        setPhase('setup')
+        return
+      }
+    } else {
+      const { list, label: noteLabel } = pickScope()
+      if (!list.length) {
+        setError('这个范围里没有知识点，换一个范围试试。')
+        return
+      }
+      if (useDemo) {
+        beginRun(demoQuestions(), '演示题目')
+        return
+      }
+      // 优先挑薄弱的知识点，再打乱顺序；一次最多喂 12 条，避免 prompt 过长
+      const ranked = [...list].sort((a, b) => weakness(b.review) - weakness(a.review)).slice(0, 12)
+      source = { kind: 'notes', notes: shuffle(ranked) }
+      label = noteLabel
+      setError(null)
+      setScopeLabel(label)
+      setPhase('loading')
     }
 
-    if (useDemo) {
-      beginRun(demoQuestions(), '演示题目')
-      return
-    }
-
-    // 优先挑薄弱的知识点，再打乱顺序；一次最多喂 12 条，避免 prompt 过长
-    const ranked = [...list].sort((a, b) => weakness(b.review) - weakness(a.review)).slice(0, 12)
-    const picked = shuffle(ranked)
-
-    setError(null)
-    setScopeLabel(label)
-    setPhase('loading')
     try {
-      const qs = await generateQuiz(settings.deepseekKey, settings.model, picked, { count, types })
+      const qs = await generateQuiz(settings.deepseekKey, settings.model, source, { count, types })
       beginRun(qs, label)
     } catch (e) {
       setError(e instanceof AIError ? e.message : '出题失败，再试一次')
@@ -223,9 +320,127 @@ export function Quiz() {
           </div>
         )}
 
+        {/* 从课程材料出题 */}
+        <section className="card space-y-4 p-5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Paperclip className="h-4 w-4 text-stone-400" />
+              <h2 className="text-sm font-medium text-stone-800">从课程材料出题</h2>
+              <span className="rounded-full bg-stone-100 px-2 py-0.5 text-[10px] text-stone-500">可选</span>
+            </div>
+            {material && (
+              <button className="btn-ghost text-xs" onClick={clearMaterial}>
+                <Trash2 className="h-3.5 w-3.5" /> 移除
+              </button>
+            )}
+          </div>
+
+          {!material && !extracting && (
+            <label className="flex cursor-pointer flex-col items-center gap-1.5 rounded-xl border border-dashed border-stone-300 bg-stone-50/50 px-4 py-6 text-center transition hover:border-teal-400 hover:bg-teal-50/30">
+              <input
+                type="file"
+                accept={ACCEPT_ATTR}
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  void handleFiles(e.target.files)
+                  e.currentTarget.value = ''
+                }}
+              />
+              <Upload className="h-5 w-5 text-stone-400" />
+              <span className="text-sm text-stone-700">上传 PPT / PDF / Word / 图片</span>
+              <span className="max-w-sm text-[11px] leading-5 text-stone-400">
+                PPT、PDF、Word 会自动抽出文字（不花钱、不上传服务器）；图片交给 AI 直接看图
+              </span>
+            </label>
+          )}
+
+          {extracting && (
+            <div className="flex items-center gap-2 rounded-xl bg-stone-50 px-3.5 py-3 text-xs text-stone-500">
+              <Spinner className="h-3.5 w-3.5" /> {extracting}
+            </div>
+          )}
+
+          {materialError && (
+            <p className="rounded-xl bg-red-50 px-3.5 py-2.5 text-xs leading-6 text-red-700">{materialError}</p>
+          )}
+
+          {material && (
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 rounded-xl bg-stone-50 px-3.5 py-2.5">
+                {material.images.length ? (
+                  <ImageIcon className="h-4 w-4 shrink-0 text-stone-400" />
+                ) : (
+                  <FileText className="h-4 w-4 shrink-0 text-stone-400" />
+                )}
+                <span className="min-w-0 flex-1 truncate text-sm text-stone-700">{material.name}</span>
+                <span className="shrink-0 text-[11px] text-stone-400">
+                  {material.pages ? `${material.pages} 页 · ` : ''}
+                  {material.text ? `${material.text.length.toLocaleString()} 字` : `${material.images.length} 张图`}
+                </span>
+              </div>
+
+              {material.images.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {material.images.map((f, i) => (
+                    <span key={`${f.name}-${i}`} className="chip max-w-[13rem]">
+                      <span className="truncate">{f.name}</span>
+                    </span>
+                  ))}
+                  {material.images.length < 6 && (
+                    <label className="chip cursor-pointer text-teal-700">
+                      + 再加一张
+                      <input
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          void handleFiles(e.target.files)
+                          e.currentTarget.value = ''
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
+              )}
+
+              {material.images.length > 0 && !supportsVision(settings.model) && (
+                <p className="rounded-xl bg-amber-50 px-3.5 py-2.5 text-xs leading-6 text-amber-800">
+                  当前模型 <span className="font-mono">{settings.model}</span> 看不了图片，去「设置」换成{' '}
+                  <span className="font-mono">deepseek-flash</span>。
+                </p>
+              )}
+
+              {material.text && (
+                <div>
+                  <button
+                    className="text-xs text-stone-500 underline decoration-stone-300 underline-offset-2 hover:text-stone-800"
+                    onClick={() => setShowMaterialText((v) => !v)}
+                  >
+                    {showMaterialText ? '收起文字' : '查看 / 修改提取出来的文字'}
+                  </button>
+                  {showMaterialText && (
+                    <textarea
+                      value={material.text}
+                      onChange={(e) => setMaterial({ ...material, text: e.target.value })}
+                      className="input mt-2 h-52 resize-y font-mono text-[12px] leading-6"
+                    />
+                  )}
+                </div>
+              )}
+
+              <p className="text-[11px] leading-5 text-stone-400">
+                这次只依据这份材料出题，下面的「笔记范围」不生效。材料不会存进仓库，用完就没了。
+              </p>
+            </div>
+          )}
+        </section>
+
         <section className="card space-y-5 p-5">
-          <div>
-            <p className="label">出题范围</p>
+          {!material && (
+            <div>
+              <p className="label">出题范围</p>
             <div className="flex flex-wrap gap-1.5">
               <ModeChip active={mode === 'all'} onClick={() => setMode('all')}>
                 全部知识点
@@ -275,7 +490,8 @@ export function Quiz() {
                 只考：{presetNote.title}
               </p>
             )}
-          </div>
+            </div>
+          )}
 
           <div>
             <p className="label">题量</p>
@@ -317,16 +533,27 @@ export function Quiz() {
                 )
               })}
             </div>
+            <p className="mt-2 text-[11px] leading-5 text-stone-400">
+              {types.length
+                ? types.map((t) => `${QUESTION_TYPE_LABEL[t]}·${QUESTION_TYPE_HINT[t]}`).join('　')
+                : '一个题型都没选，出不了题'}
+            </p>
           </div>
 
-          <button className="btn-primary w-full py-3" onClick={() => void start()} disabled={!notes.length}>
-            <Sparkles className="h-4 w-4" /> 开始出题
+          <button
+            className="btn-primary w-full py-3"
+            onClick={() => void start()}
+            disabled={!notes.length && !material}
+          >
+            <Sparkles className="h-4 w-4" /> {material ? '用这份材料出题' : '开始出题'}
           </button>
         </section>
 
         <p className="text-center text-[11px] leading-5 text-stone-400">
           {settings.demo && !settings.deepseekKey ? (
-            <>演示模式：这次会用 5 道内置示例题，让你先看看答题和讲解长什么样。配好 Key 之后，就是真正按你自己的笔记出题。</>
+            <>演示模式：这次会用 5 道内置示例题，让你先看看答题和讲解长什么样。配好 Key 之后，就是真正按你自己的材料出题。</>
+          ) : material ? (
+            <>这次只依据上传的材料出题，题目和讲解都会锚定在材料内容上。</>
           ) : (
             <>
               出一次题大概花几厘钱。生成的题目会存一份到你的仓库 <span className="font-mono">quizzes/</span> 里，方便考前回看。
